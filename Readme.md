@@ -32,6 +32,7 @@ config                                            | json配置文件，格式见
     "default_handler": {
         "operation": "ignore"
     },
+    // 查重各文件配置。可以留空。
     "plagiarism_test": {
         "上交的文件名1": {
             "template": "模板文件位置，相对于配置文件的相对路径或绝对路径；可以留空，代表没有模板。",

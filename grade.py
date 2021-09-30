@@ -69,6 +69,7 @@ class Grader:
         self.stu_files_folder = args.student_files if path.isabs(args.student_files) else path.join(self.real_path, args.student_files)
         self.output_dir = args.output_dir if path.isabs(args.output_dir) else path.join(self.real_path, args.output_dir)
         self.codex = args.codex
+        self.plagiarism_threshold = args.plagiarism_threshold
         try:
             with open(self.config_file, "r") as cf:
                 self.config = DotDict(json.loads(cf.read()))
@@ -101,7 +102,7 @@ class Grader:
             self.env_available.append(Lock())
         self.result_mutex = Lock()
         self.output_mutex = Lock()
-        self.scores = {}
+        self.results = {}
         self.bad_files = []
     
 
@@ -109,7 +110,7 @@ class Grader:
         logger.info("正在构造评测环境……")
 
         if os.path.exists(self.grading_env_path):
-            shutil.rmtree(self.grading_env_path, ignore_errors=True)
+            shutil.rmtree(self.grading_env_path)
         
         os.mkdir(self.grading_env_path)
         os.mkdir(self.clean_xv6_path)
@@ -122,18 +123,24 @@ class Grader:
             exit(0)
         
         logger.debug("正在构造查重检查文件夹……")
-        if os.path.exists(self.moss_path):
-            shutil.rmtree(self.moss_path, ignore_errors=True)
         
+        if os.path.exists(self.moss_path):
+            shutil.rmtree(self.moss_path)
         os.mkdir(self.moss_path)
+
         for file, conf in self.config.plagiarism_test.items():
             os.mkdir(path.join(self.moss_path, file))
             for sol in conf.known_solutions:
                 shutil.copy(sol, path.join(self.moss_path, file))
         
         if os.path.exists(self.config.moss_report_dir):
-            shutil.rmtree(self.config.moss_report_dir, ignore_errors=True)
+            shutil.rmtree(self.config.moss_report_dir)
         os.mkdir(self.config.moss_report_dir)
+        
+        if os.path.exists(self.config.script_output):
+            shutil.rmtree(self.config.script_output)
+        os.mkdir(self.config.script_output)
+
         for to_check in self.config.plagiarism_test:
             os.mkdir(path.join(self.config.moss_report_dir, to_check))
 
@@ -156,12 +163,13 @@ class Grader:
             if not path.exists(self.output_dir):
                 os.mkdir(self.output_dir)
             score_path = path.join(self.output_dir, "score.csv")
-            with open(score_path, "w", encoding=self.codex) as score:
-                writer = csv.writer(score)
-                for file_name, score in self.scores.items():
+            with open(score_path, "w", encoding=self.codex) as score_file:
+                writer = csv.writer(score_file)
+                writer.writerow(["学号", "姓名", "得分", "注释"])
+                for file_name, (score, err_msg) in self.results.items():
                     parse_regex = r"^([a-zA-Z0-9]{4,12})_([\w\u4e00-\u9fa5\u2000-\u206F]{2,30})_file\.zip$"
                     match_res = re.match(parse_regex, file_name)
-                    writer.writerow([match_res.groups()[0], match_res.groups()[1], score])
+                    writer.writerow([match_res.groups()[0], match_res.groups()[1], score, err_msg])
             logger.info(f"成绩已保存至{score_path}。")
             bad_path = path.join(self.output_dir, "bad_files.csv")
             with open(bad_path, "w", encoding=self.codex) as bad_list:
@@ -182,14 +190,19 @@ class Grader:
             for sol in conf.known_solutions:
                 moss_client.addFile(sol)
             moss_client.addFilesByWildcard(f"{path.join(self.moss_path, to_check)}/*{to_check}")
-            report_url = moss_client.send()
+            logger.info(f"正在发送{to_check}的代码，以进行代码查重。")
+            report_url = moss_client.send(lambda file_path, display_name: print('*', end='', flush=True))
             logger.info(f"{to_check}的代码查重报告已成功生成，报告URL为{report_url}。")
-            moss_client.saveWebPage(report_url, path.join(self.config.moss_report_dir, to_check, "report.html"))
-            mosspy.download_report(report_url, path.join(self.config.moss_report_dir, to_check, "report"), connections=8)
+            # moss_client.saveWebPage(report_url, path.join(self.config.moss_report_dir, to_check, "report.html"))
+            mosspy.download_report(report_url, path.join(self.config.moss_report_dir, to_check, "report"), connections=20, on_read=lambda url: print('*', end='', flush=True))
             logger.info(f"{to_check}的代码查重报告已成功存储到本地{path.join(self.config.moss_report_dir, to_check, 'report.html')}。")
         logger.info(f"代码查重报告已全部生成并保存至本地。")
-            
-        
+    
+
+    def visualize_plagiarism():
+        """"""
+
+
     
     def alloc_env(self):
         for i, lock in enumerate(self.env_available):
@@ -198,7 +211,6 @@ class Grader:
         
         logger.fatal("找不到空闲的评测环境。")
         exit(0)
-
 
     def free_env(self, env_id):
         self.env_available[env_id].release()
@@ -216,6 +228,7 @@ class Grader:
 
         name = None
         stu_id = None
+        err_msg = []
 
         if not match_res:
             logger.warning(f"检测到不符合命名规则的文件{student_file}。")
@@ -230,9 +243,9 @@ class Grader:
             stu_id = match_res.groups()[0]
             logger.debug(f"评测环境{env_id}开始对{name}（{stu_id}）的提交文件执行测试。")
 
-        shutil.rmtree(env_path, ignore_errors=True)
-
         logger.verbose(f"正在初始化并行评测环境{env_id}……")
+        if path.exists(env_path):
+            shutil.rmtree(env_path)
         os.mkdir(env_path)
         shutil.copytree(self.clean_xv6_path, env_judge_path)
         
@@ -240,14 +253,21 @@ class Grader:
         try:
             with zipfile.ZipFile(orig_stu_path, 'r') as zip_ref:
                 zip_ref.extractall(env_stu_path)
+            
+            compressed_files = glob.glob(env_stu_path + "/**/*.zip", recursive=True) + glob.glob(env_stu_path + "/**/*.rar", recursive=True)
+            while compressed_files:
+                logger.debug(f"在{name}（{stu_id}）的提交文件中发现嵌套压缩包{[path.basename(f) for f in compressed_files]}。正在重新解压。")
+                for cf in compressed_files:
+                    if cf.endswith(".zip"):
+                        with zipfile.ZipFile(cf, 'r') as zip_ref:
+                            zip_ref.extractall(env_stu_path)
+                    elif cf.endswith(".rar"):
+                        subprocess.check_call(["unrar", "x", cf, env_stu_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    os.remove(cf)
+                compressed_files = glob.glob(env_stu_path + "/**/*.zip", recursive=True) + glob.glob(env_stu_path + "/**/*.rar", recursive=True)
         except Exception as e:
-            logger.error(f"无法将{orig_stu_path}解压至{env_stu_path}。放弃评测。")
-            self.free_env(env_id)
-            self.result_mutex.acquire()
-            self.bad_files.append(student_file)
-            self.result_mutex.release()
-            self.semaphore.release()
-            return
+            logger.error(f"无法完成对{name}（{stu_id}）的提交文件的解压。失败原因：{e}")
+            err_msg.append(f"无法解压，因为'{e}'")
         
         logger.verbose(f"正在将需要查重的学生文件重命名并复制至查重文件夹……")
 
@@ -257,19 +277,34 @@ class Grader:
         logger.verbose(f"正在构造评测环境……")
 
         logger.verbose(f"正在复制需要学生新建的文件……")
+        missing_files = []
         for file_name, dst in self.config.new_file.items():
             try:
                 os.remove(path.join(env_judge_path, dst))
             except OSError:
                 pass
             
-            if not self.find_copy(file_name, env_stu_path, path.join(env_judge_path, dst)):
-                logger.warning(f"未在{name}（{stu_id}）的提交中找到需要新建的源文件{file_name}。")
+            find_count = self.find_copy(file_name, env_stu_path, path.join(env_judge_path, dst))
+            if find_count == 0:
+                logger.debug(f"未在{name}（{stu_id}）的提交中找到需要新建的源文件{file_name}。")
+                missing_files.append(file_name)
+            elif find_count != 1:
+                logger.debug(f"在{name}（{stu_id}）的提交中发现多个{file_name}，任选其一。")
+                err_msg.append(f"发现多个{file_name}")
         
         logger.verbose(f"正在替换需要学生更改的文件……")
         for file_name, dst in self.config.alter_file.items():
-            if not self.find_copy(file_name, env_stu_path, path.join(env_judge_path, dst)):
-                logger.warning(f"未在{name}（{stu_id}）的提交中找到需要替换的源文件{file_name}。将使用评测环境中的源文件代替。")
+            find_count = self.find_copy(file_name, env_stu_path, path.join(env_judge_path, dst))
+            if find_count == 0:
+                logger.debug(f"未在{name}（{stu_id}）的提交中找到需要替换的源文件{file_name}。将使用评测环境中的源文件代替。")
+                missing_files.append(file_name)
+            elif find_count != 1:
+                logger.debug(f"在{name}（{stu_id}）的提交中发现多个{file_name}，任选其一。")
+                err_msg.append(f"发现多个{file_name}")
+        
+        if missing_files:
+            logger.warning(f"{name}（{stu_id}）的提交中缺少下列文件：{missing_files}")
+            err_msg.append(f"缺少文件：{missing_files}")
         
         logger.verbose(f"正在根据配置最终覆写评测环境……")
         for override_item in self.config.overrides:
@@ -289,6 +324,7 @@ class Grader:
                         wf.write(replaced_txt)
                 except Exception as e:
                     logger.error(f"替换{to_override}的内容时出现错误。")
+                    err_msg.append(f"替换{to_override}的内容时出现错误")
                 logger.verbose(f"完成对{to_override}内容的替换。")
             elif override_item.operation.type == "creation":
                 to_create = path.join(env_judge_path, override_item.file_path)
@@ -298,6 +334,7 @@ class Grader:
                         wf.write(content_expanded)
                 except Exception as e:
                     logger.error(f"生成{to_create}时出现错误：{e}。")
+                    err_msg.append(f"生成{to_create}时出现错误")
                 logger.verbose(f"完成对{to_create}的生成。")
             
         logger.debug(f"评测环境{env_id}构造完成，开始评测。")
@@ -313,21 +350,32 @@ class Grader:
                 found = True
                 break
 
+        self.output_mutex.acquire()
+
         if not found:
-            self.output_mutex.acquire()
             logger.error(f"在运行{name}（{stu_id}）的提交时，评测脚本执行失败，0分。")
-            logger.verbose(f"评测脚本输出（stdout）：")
-            for line in p.stdout.split(b'\n'):
-                logger.verbose(f"\t{line}")
-            logger.verbose(f"评测脚本输出（stderr）：")
-            for line in p.stderr.split(b'\n'):
-                logger.verbose(f"\t{line}")
-            self.output_mutex.release()
+            err_msg.append(f"评测脚本执行失败")
         else:
             logger.info(f"{name}（{stu_id}）的提交评测完成，{score}分。")
+            err_msg.append(f"评测脚本执行成功")
+        
+        logger.verbose(f"评测脚本输出（stdout）：")
+        for line in p.stdout.split(b'\n'):
+            logger.verbose(f"\t{line}")
+        logger.verbose(f"评测脚本输出（stderr）：")
+        for line in p.stderr.split(b'\n'):
+            logger.verbose(f"\t{line}")
+        
+        with open(path.join(self.config.script_output, f"{student_file}_outputlog.txt"), "w") as log_file:
+            log_file.write("\n===== stdout =====\n")
+            log_file.write(p.stdout.decode(self.codex))
+            log_file.write("\n===== stderr =====\n")
+            log_file.write(p.stderr.decode(self.codex))
+
+        self.output_mutex.release()
 
         self.result_mutex.acquire()
-        self.scores[student_file] = score
+        self.results[student_file] = (score, ";".join(err_msg))
         if score == 0:
             self.bad_files.append(student_file)
         self.result_mutex.release()
@@ -339,15 +387,14 @@ class Grader:
     def find_copy(self, file_name, src_dir, dst_path):
         matches = glob.glob(src_dir+"/**/"+file_name, recursive=True)
         if not matches:
-            return False
-        elif len(matches) != 1:
-            for m in matches:
-                logger.warning(f"\t{m}")
-            return False
-        else:
-            shutil.copy(matches[0], dst_path)
-            logger.verbose(f"将文件{matches[0]}拷贝至{dst_path}")
-            return True
+            return 0
+        
+        if len(matches) != 1:
+            logger.debug(f"发现多个{file_name}文件，选择{matches[0]}。")
+
+        shutil.copy(matches[0], dst_path)
+        logger.verbose(f"将文件{matches[0]}拷贝至{dst_path}")
+        return len(matches)
 
     
     def explain_config(self):
@@ -424,7 +471,8 @@ if __name__ == "__main__":
     arg_parser.add_argument("--student-files", "-f", type=str, default="student_files", help="学生文件压缩包所在的文件夹。默认位于./student_files")
     arg_parser.add_argument('-v', '--verbose', action='count', default=0, help="输出等级。v越多，输出越多。支持-v -vv -vvv和空。")
     arg_parser.add_argument("--output-dir", "-o", type=str, default="result", help="评测得分输出文件夹。默认位于./grading_envs")
-    arg_parser.add_argument("--codex", "-c", type=str, default="GB2312", help="输出.csv文件的编码。默认为GB2312。")
+    arg_parser.add_argument("--codex", "-c", type=str, default="GB18030", help="输出.csv文件的编码。默认为GB18030。")
+    arg_parser.add_argument("--plagiarism-threshold", "-t", type=int, default=90, help="抄袭判定阈值。默认为90。")
     args = arg_parser.parse_args()
     
     logging.addLevelName(logging.DEBUG      , "细节")
@@ -456,3 +504,4 @@ if __name__ == "__main__":
     grader.setup_env()
     grader.batch_grade()
     grader.plagiarism_test()
+    grader.visualize_plagiarism()

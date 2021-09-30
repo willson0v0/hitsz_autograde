@@ -4,8 +4,7 @@
     "primes.c": "user/primes.c",
     "find.c": "user/find.c",
     "xargs.c": "user/xargs.c",
-    "sleep.c": "user/sleep.c",
-    "time.txt": "time.txt"
+    "sleep.c": "user/sleep.c"
   },
   "alter_file": { "Makefile": "Makefile" },
   "default_handler": {
@@ -45,7 +44,8 @@
   "moss_userid": 507639744,
   "moss_report_dir": "moss_report",
   "test_script": "grade-lab-util",
+  "script_output": "exec_log",
   "result_regex": "^Score: ([0-9]{1,3})/100$",
-  "repo": "/mnt/shared_resources/xv6-labs-2020",
+  "repo": "/mnt/shared_resources/xv6-riscv-fall19",
   "branch": "util"
 }
