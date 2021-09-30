@@ -12,8 +12,9 @@ import re
 import glob
 import zipfile
 import csv
+import mosspy
 
-VERBOSE_LOG_LEVEL = 9
+LESSDEBUG_LOG_LEVEL = 15
 
 class CustomFormatter(logging.Formatter):
     grey        = "\x1b[90m"
@@ -26,8 +27,8 @@ class CustomFormatter(logging.Formatter):
     format      = "[ %(asctime)s ] [ %(levelname)s ]:\t%(message)s"
 
     FORMATS = {
-        VERBOSE_LOG_LEVEL: grey + format + reset,
-        logging.DEBUG: white + format + reset,
+        logging.DEBUG: grey + format + reset,
+        LESSDEBUG_LOG_LEVEL: white + format + reset,
         logging.INFO: green + format + reset,
         logging.WARNING: yellow + format + reset,
         logging.ERROR: red + format + reset,
@@ -40,13 +41,13 @@ class CustomFormatter(logging.Formatter):
         return formatter.format(record)
 
 
-def verbose(self, message, *args, **kws):
-    if self.isEnabledFor(VERBOSE_LOG_LEVEL):
-        self._log(VERBOSE_LOG_LEVEL, message, args, **kws) 
+def less_debug(self, message, *args, **kws):
+    if self.isEnabledFor(LESSDEBUG_LOG_LEVEL):
+        self._log(LESSDEBUG_LOG_LEVEL, message, args, **kws) 
 
 
 ch = logging.StreamHandler()
-logger = logging.getLogger(__name__)
+logger = logging.getLogger()
 
 class DotDict(dict):
     __getattr__ = dict.get
@@ -82,6 +83,10 @@ class Grader:
                 self.config.overrides = [DotDict(f) for f in self.config.overrides]
                 for override in self.config.overrides:
                     override.operation = DotDict(override.operation)
+                if not self.config.moss_report_dir:
+                    self.config.moss_report_dir = "moss_report"
+                if not path.isabs(self.config.moss_report_dir):
+                    self.config.moss_report_dir = path.join(self.real_path, self.config.moss_report_dir)
         except FileNotFoundError:
             logger.fatal("未找到对应配置文件。")
             exit(0)
@@ -125,6 +130,12 @@ class Grader:
             os.mkdir(path.join(self.moss_path, file))
             for sol in conf.known_solutions:
                 shutil.copy(sol, path.join(self.moss_path, file))
+        
+        if os.path.exists(self.config.moss_report_dir):
+            shutil.rmtree(self.config.moss_report_dir, ignore_errors=True)
+        os.mkdir(self.config.moss_report_dir)
+        for to_check in self.config.plagiarism_test:
+            os.mkdir(path.join(self.config.moss_report_dir, to_check))
 
     def batch_grade(self):
         logger.info("开始准备批量评测……")
@@ -163,8 +174,20 @@ class Grader:
     
 
     def plagiarism_test(self):
-        for file in self.config.plagiarism_test:
-            logger.debug(f"开始对{file}执行代码查重。")
+        for to_check, conf in self.config.plagiarism_test.items():
+            logger.debug(f"开始对{to_check}执行代码查重。")
+            moss_client = mosspy.Moss(self.config.moss_userid, "c")
+            if conf.template:
+                moss_client.addBaseFile(conf.template)
+            for sol in conf.known_solutions:
+                moss_client.addFile(sol)
+            moss_client.addFilesByWildcard(f"{path.join(self.moss_path, to_check)}/*{to_check}")
+            report_url = moss_client.send()
+            logger.info(f"{to_check}的代码查重报告已成功生成，报告URL为{report_url}。")
+            moss_client.saveWebPage(report_url, path.join(self.config.moss_report_dir, to_check, "report.html"))
+            mosspy.download_report(report_url, path.join(self.config.moss_report_dir, to_check, "report"), connections=8)
+            logger.info(f"{to_check}的代码查重报告已成功存储到本地{path.join(self.config.moss_report_dir, to_check, 'report.html')}。")
+        logger.info(f"代码查重报告已全部生成并保存至本地。")
             
         
     
@@ -360,6 +383,7 @@ class Grader:
         if not self.config.plagiarism_test:
             logger.debug("不进行代码查重检测。")
         else:
+            logger.debug(f"使用id{self.config.moss_userid}进行MOSS查重。")
             for to_check, c_conf in self.config.plagiarism_test.items():
                 logger.debug(f"对文件{to_check}进行代码查重：")
                 if not c_conf.template:
@@ -403,13 +427,14 @@ if __name__ == "__main__":
     arg_parser.add_argument("--codex", "-c", type=str, default="GB2312")
     args = arg_parser.parse_args()
     
-    logging.addLevelName(VERBOSE_LOG_LEVEL  , "细节")
-    logging.addLevelName(logging.DEBUG      , "调试")
+    logging.addLevelName(logging.DEBUG      , "细节")
+    logging.addLevelName(LESSDEBUG_LOG_LEVEL, "调试")
     logging.addLevelName(logging.INFO       , "信息")
     logging.addLevelName(logging.WARNING    , "警告")
     logging.addLevelName(logging.ERROR      , "错误")
     logging.addLevelName(logging.FATAL      , "致命")
-    logging.Logger.verbose = verbose
+    logging.Logger.verbose = logging.Logger.debug
+    logging.Logger.debug = less_debug
 
     if args.verbose == 0:
         logger.setLevel(logging.WARNING)
@@ -418,16 +443,16 @@ if __name__ == "__main__":
         logger.setLevel(logging.INFO)
         ch.setLevel(logging.INFO)
     elif args.verbose == 2:
+        logger.setLevel(LESSDEBUG_LOG_LEVEL)
+        ch.setLevel(LESSDEBUG_LOG_LEVEL)
+    else:
         logger.setLevel(logging.DEBUG)
         ch.setLevel(logging.DEBUG)
-    else:
-        logger.setLevel(VERBOSE_LOG_LEVEL)
-        ch.setLevel(VERBOSE_LOG_LEVEL)
     
     ch.setFormatter(CustomFormatter())
     logger.addHandler(ch)
 
     grader = Grader(args)
-    # grader.setup_env()
-    # grader.batch_grade()
+    grader.setup_env()
+    grader.batch_grade()
     grader.plagiarism_test()
