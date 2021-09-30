@@ -290,7 +290,7 @@ class Grader:
                 except Exception as e:
                     logger.error(f"替换{to_override}的内容时出现错误。")
                 logger.verbose(f"完成对{to_override}内容的替换。")
-            elif override_item.operation.type == "create":
+            elif override_item.operation.type == "creation":
                 to_create = path.join(env_judge_path, override_item.file_path)
                 try:
                     content_expanded = override_item.operation.content.format(env_id=env_id, stu_id=stu_id, name=name)
@@ -409,7 +409,7 @@ class Grader:
                     logger.debug(f"\t替换文件{override.file_path}内容：")
                     logger.debug(f"\t\t原串：{override.operation.original}")
                     logger.debug(f"\t\t新串：{override.operation.altered}")
-                elif override.operation.type == "create":
+                elif override.operation.type == "creation":
                     logger.debug(f"\t创建文件{override.file_path}：")
                     logger.debug(f"\t\t内容：{override.operation.content}")
                 else:
@@ -418,13 +418,13 @@ class Grader:
 
 
 if __name__ == "__main__":
-    arg_parser = argparse.ArgumentParser(description="Auto grading script for xv6 lab.")
-    arg_parser.add_argument("config", type=str, help="DotDict json file for auto grading.")
-    arg_parser.add_argument("--parallel", "-p", type=int, default=1, help="Parallel grading job count. Defaults to 1.")
-    arg_parser.add_argument("--student-files", "-f", type=str, default="student_files", help="Students' compressed files folder. Defaults to ./students_files.")
-    arg_parser.add_argument('-v', '--verbose', action='count', default=0)
-    arg_parser.add_argument("--output-dir", "-o", type=str, default="result")
-    arg_parser.add_argument("--codex", "-c", type=str, default="GB2312")
+    arg_parser = argparse.ArgumentParser(description="通用自动评测脚本。")
+    arg_parser.add_argument("config", type=str, help="自动评测脚本配置文件。")
+    arg_parser.add_argument("--parallel", "-p", type=int, default=1, help="并行任务数量。默认为1。")
+    arg_parser.add_argument("--student-files", "-f", type=str, default="student_files", help="学生文件压缩包所在的文件夹。默认位于./student_files")
+    arg_parser.add_argument('-v', '--verbose', action='count', default=0, help="输出等级。v越多，输出越多。支持-v -vv -vvv和空。")
+    arg_parser.add_argument("--output-dir", "-o", type=str, default="result", help="评测得分输出文件夹。默认位于./grading_envs")
+    arg_parser.add_argument("--codex", "-c", type=str, default="GB2312", help="输出.csv文件的编码。默认为GB2312。")
     args = arg_parser.parse_args()
     
     logging.addLevelName(logging.DEBUG      , "细节")
