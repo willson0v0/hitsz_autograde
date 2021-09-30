@@ -93,3 +93,11 @@ config                                            | json配置文件，格式见
     "branch": "util"
 }
 ```
+
+## 依赖
+
+```console
+pip install mosspy
+sudo apt install unrar
+sudo apt-get install graphviz
+```

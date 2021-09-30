@@ -70,6 +70,7 @@ class Grader:
         self.output_dir = args.output_dir if path.isabs(args.output_dir) else path.join(self.real_path, args.output_dir)
         self.codex = args.codex
         self.plagiarism_threshold = args.plagiarism_threshold
+        self.anonymous = args.anonymous
         try:
             with open(self.config_file, "r") as cf:
                 self.config = DotDict(json.loads(cf.read()))
@@ -84,10 +85,10 @@ class Grader:
                 self.config.overrides = [DotDict(f) for f in self.config.overrides]
                 for override in self.config.overrides:
                     override.operation = DotDict(override.operation)
-                if not self.config.moss_report_dir:
-                    self.config.moss_report_dir = "moss_report"
-                if not path.isabs(self.config.moss_report_dir):
-                    self.config.moss_report_dir = path.join(self.real_path, self.config.moss_report_dir)
+                if not self.config.moss_report_path:
+                    self.config.moss_report_path = "moss_report"
+                if not path.isabs(self.config.moss_report_path):
+                    self.config.moss_report_path = path.join(self.real_path, self.config.moss_report_path)
         except FileNotFoundError:
             logger.fatal("未找到对应配置文件。")
             exit(0)
@@ -104,6 +105,7 @@ class Grader:
         self.output_mutex = Lock()
         self.results = {}
         self.bad_files = []
+        self.report_url = {}
     
 
     def setup_env(self):
@@ -133,16 +135,9 @@ class Grader:
             for sol in conf.known_solutions:
                 shutil.copy(sol, path.join(self.moss_path, file))
         
-        if os.path.exists(self.config.moss_report_dir):
-            shutil.rmtree(self.config.moss_report_dir)
-        os.mkdir(self.config.moss_report_dir)
-        
         if os.path.exists(self.config.script_output):
             shutil.rmtree(self.config.script_output)
         os.mkdir(self.config.script_output)
-
-        for to_check in self.config.plagiarism_test:
-            os.mkdir(path.join(self.config.moss_report_dir, to_check))
 
     def batch_grade(self):
         logger.info("开始准备批量评测……")
@@ -191,17 +186,25 @@ class Grader:
                 moss_client.addFile(sol)
             moss_client.addFilesByWildcard(f"{path.join(self.moss_path, to_check)}/*{to_check}")
             logger.info(f"正在发送{to_check}的代码，以进行代码查重。")
-            report_url = moss_client.send(lambda file_path, display_name: print('*', end='', flush=True))
-            logger.info(f"{to_check}的代码查重报告已成功生成，报告URL为{report_url}。")
-            # moss_client.saveWebPage(report_url, path.join(self.config.moss_report_dir, to_check, "report.html"))
-            mosspy.download_report(report_url, path.join(self.config.moss_report_dir, to_check, "report"), connections=20, on_read=lambda url: print('*', end='', flush=True))
-            logger.info(f"{to_check}的代码查重报告已成功存储到本地{path.join(self.config.moss_report_dir, to_check, 'report.html')}。")
-        logger.info(f"代码查重报告已全部生成并保存至本地。")
+            report_url = moss_client.send()
+            logger.info(f"{to_check}的代码查重报告已生成，报告URL为{report_url}。")
+            self.report_url[to_check] = report_url
     
 
-    def visualize_plagiarism():
-        """"""
-
+    def visualize_plagiarism(self):
+        logger.info(f"正在生成可视化查重结果...")
+        leading_cmd = ["mossum", "-f", "svg", "-t", ".*/(.*)_(.*)_.*", "-m", "-p", "90", "-o", f"{self.config.moss_report_path}"]
+        if self.anonymous:
+            leading_cmd.append("-a")
+        mossum_proc = subprocess.Popen(leading_cmd + [url for _, url in self.report_url.items()], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        with mossum_proc.stdout:
+            for line in iter(mossum_proc.stdout.readline, b''):
+                logging.debug(f"mossum output: {line}")
+        exitcode = mossum_proc.wait() # 0 means success
+        if exitcode == 0:
+            logger.info(f"可视化查重结果已生成于{self.config.moss_report_path}")
+        else:
+            logger.info(f"可视化查重结果生成失败。")
 
     
     def alloc_env(self):
@@ -473,6 +476,7 @@ if __name__ == "__main__":
     arg_parser.add_argument("--output-dir", "-o", type=str, default="result", help="评测得分输出文件夹。默认位于./grading_envs")
     arg_parser.add_argument("--codex", "-c", type=str, default="GB18030", help="输出.csv文件的编码。默认为GB18030。")
     arg_parser.add_argument("--plagiarism-threshold", "-t", type=int, default=90, help="抄袭判定阈值。默认为90。")
+    arg_parser.add_argument("--anonymous", "-a", action="store_true", default=90, help="抄袭判定阈值。默认为90。")
     args = arg_parser.parse_args()
     
     logging.addLevelName(logging.DEBUG      , "细节")
