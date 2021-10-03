@@ -471,7 +471,7 @@ if __name__ == "__main__":
     arg_parser = argparse.ArgumentParser(description="通用自动评测脚本。")
     arg_parser.add_argument("config", type=str, help="自动评测脚本配置文件。")
     arg_parser.add_argument("--parallel", "-p", type=int, default=1, help="并行任务数量。默认为1。")
-    arg_parser.add_argument("--student-files", "-f", type=str, default="student_files", help="学生文件压缩包所在的文件夹。默认位于./student_files")
+    arg_parser.add_argument("--student-files", "-f", type=str, default=None, help="学生文件压缩包所在的文件夹。默认位于./student_files")
     arg_parser.add_argument('-v', '--verbose', action='count', default=0, help="输出等级。v越多，输出越多。支持-v -vv -vvv和空。")
     arg_parser.add_argument("--output-dir", "-o", type=str, default="result", help="评测得分输出文件夹。默认位于./grading_envs")
     arg_parser.add_argument("--codex", "-c", type=str, default="GB18030", help="输出.csv文件的编码。默认为GB18030。")
